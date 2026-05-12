@@ -2,19 +2,20 @@
 """QQ Zone 群相册批量下载工具"""
 
 import argparse
+import json
 import os
 import re
 import sys
 import time
-import json
-from datetime import datetime
-from threading import Lock, Event, get_ident
-from queue import Queue
-import requests
-import browser_cookie3
-from pathlib import Path
-from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from queue import Queue
+from threading import Event, Lock, get_ident
+
+import browser_cookie3
+import requests
+from tqdm import tqdm
 
 WORKERS = 8
 ALBUM_CACHE_TTL = 3600  # 1 小时
@@ -68,15 +69,14 @@ def g_tk(key: str) -> int:
 # ── API ───────────────────────────────────────────────────────────────────────
 
 def _parse_dt(raw, fmt: str = "%Y%m%d_%H%M%S") -> str | None:
-    """将 API 时间字段（时间戳或 'YYYY-MM-DD HH:MM:SS'）转为指定格式字符串"""
+    """将 API 时间字段（Unix 时间戳或 'YYYY-MM-DD HH:MM:SS'）转为指定格式字符串"""
     if not raw:
         return None
     s = str(raw).strip()
-    if s.replace(".", "").isdigit():
-        try:
-            return datetime.fromtimestamp(int(float(s))).strftime(fmt)
-        except Exception:
-            return None
+    try:
+        return datetime.fromtimestamp(int(float(s))).strftime(fmt)
+    except (ValueError, OSError, OverflowError):
+        pass
     try:
         return datetime.strptime(s[:19], "%Y-%m-%d %H:%M:%S").strftime(fmt)
     except ValueError:
@@ -164,7 +164,6 @@ def sanitize_dir(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "未命名相册"
 
 
-SKIP = "skip"
 DONE = "done"
 FAIL = "fail"
 
@@ -185,12 +184,13 @@ def _read_exif_dt(path: Path) -> str | None:
                     dt_str = val
                 elif name == "SubSecTimeOriginal":
                     subsec = str(val).strip()
+                if dt_str and subsec:
+                    break
             if not dt_str:
                 return None
             base = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S").strftime("%Y%m%d_%H%M%S")
             if subsec and subsec.isdigit():
-                ms = (subsec + "000")[:3]  # 归一化到 3 位毫秒
-                return f"{base}_{ms}"
+                return f"{base}_{(subsec + '000')[:3]}"
             return base
     except Exception:
         pass
@@ -208,6 +208,14 @@ def _alloc_path(preferred: Path) -> Path:
             candidate = preferred.parent / f"{stem}_{i}{suffix}"
         _taken.add(candidate)
         return candidate
+
+
+def _cleanup_downloading(save_dir: Path) -> None:
+    leftovers = list(save_dir.rglob("*.downloading"))
+    if leftovers:
+        print(f"\n{_Y}🧹 正在清理 {len(leftovers)} 个未完成的临时文件...{_0}")
+        for f in leftovers:
+            f.unlink(missing_ok=True)
 
 
 def download_one(session: requests.Session, url: str, dest: Path,
@@ -263,11 +271,13 @@ def _save_cache(save_dir: Path, albums: list[dict], photos: dict, fetched_at: fl
     path = _cache_path(save_dir)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
             json.dumps({"fetched_at": fetched_at, "albums": albums, "photos": photos},
                        ensure_ascii=False),
             encoding="utf-8",
         )
+        tmp.replace(path)
     except Exception:
         pass
 
@@ -286,9 +296,10 @@ def _load_map(save_dir: Path) -> dict:
 
 def _save_map(save_dir: Path, url_map: dict) -> None:
     try:
-        _map_path(save_dir).write_text(
-            json.dumps(url_map, ensure_ascii=False), encoding="utf-8"
-        )
+        path = _map_path(save_dir)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(url_map, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
     except Exception:
         pass
 
@@ -346,7 +357,7 @@ def main():
 
     tasks: list[tuple[str, Path]] = []
     for album in albums:
-        album_id   = album.get("id", "")
+        album_id = album.get("id", "")
         ctime = album.get("createtime") or album.get("ctime") or 0
         title = album.get("title", album_id)
         date_prefix = _parse_dt(ctime, "%Y-%m-%d")
@@ -386,13 +397,6 @@ def main():
     if pre_skip:
         print(f"{_Y}⏭  {pre_skip} 张已有记录，直接跳过{_0}")
     print(f"\n{_B}📦 共 {_C}{total_photos}{_0}{_B} 张，需下载 {_C}{total}{_0}{_B} 张，保存到 {_C}{save_dir.resolve()}{_0}\n")
-
-    def cleanup_downloading():
-        leftovers = list(save_dir.rglob("*.downloading"))
-        if leftovers:
-            print(f"\n{_Y}🧹 正在清理 {len(leftovers)} 个未完成的临时文件...{_0}")
-            for f in leftovers:
-                f.unlink(missing_ok=True)
 
     # 每线程一个槽位 bar，显示当前正在下载的文件
     workers = args.workers
@@ -451,7 +455,7 @@ def main():
         for b in slot_bars:
             b.close()
         time.sleep(0.3)                              # 给线程处理异常、自删 tmp 的时间
-        cleanup_downloading()                        # 兜底清理残留
+        _cleanup_downloading(save_dir)
         _save_map(save_dir, url_map)
         print(f"\n{_Y}⚠️  已中断{_0}")
         os._exit(1)
