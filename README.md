@@ -8,7 +8,8 @@
 - Python 3.10+
 
 ```bash
-pip3 install requests browser-cookie3 tqdm
+pip3 install requests browser-cookie3 tqdm   # 必须
+pip3 install Pillow                           # 可选：优先用 EXIF 拍摄时间命名文件
 ```
 
 ## 使用方法
@@ -17,7 +18,9 @@ pip3 install requests browser-cookie3 tqdm
 
 ```bash
 python3 download.py <群号>
-python3 download.py <群号> -o /path/to/output
+python3 download.py <群号> -o /path/to/output   # 指定保存目录
+python3 download.py <群号> -j 4                 # 调整并发线程数（默认 8）
+python3 download.py <群号> -f                   # 忽略缓存强制刷新相册列表
 ```
 
 照片按 `输出目录/相册名/照片文件名` 结构保存。
