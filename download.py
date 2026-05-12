@@ -8,7 +8,7 @@ import sys
 import time
 import json
 from datetime import datetime
-from threading import Lock, Event
+from threading import Lock, Event, get_ident
 from queue import Queue
 import requests
 import browser_cookie3
@@ -153,14 +153,11 @@ def original_url(burl: str) -> str:
 
 
 def photo_filename(photo: dict, index: int) -> str:
-    """上传时间 + lloc 后6位（保证唯一），回退到序号"""
     ext = "gif" if photo.get("burl", "").lower().endswith(".gif") else "jpg"
     dt = _parse_dt(photo.get("uploadtime") or photo.get("time"))
-    lloc = photo.get("lloc") or photo.get("id") or ""
-    uid = re.sub(r'[^A-Za-z0-9]', '', lloc)[-6:] or f"{index+1:04d}"
     if dt:
-        return f"{dt}_{uid}.{ext}"
-    return f"{uid}.{ext}"
+        return f"{dt}.{ext}"
+    return f"{index+1:04d}.{ext}"
 
 
 def sanitize_dir(name: str) -> str:
@@ -173,7 +170,7 @@ FAIL = "fail"
 
 
 def _read_exif_dt(path: Path) -> str | None:
-    """从 JPEG 读取 EXIF DateTimeOriginal，返回 'YYYYMMDD_HHMMSS' 或 None"""
+    """从 JPEG 读取 EXIF DateTimeOriginal + SubSecTimeOriginal，返回 'YYYYMMDD_HHMMSS[_mmm]' 或 None"""
     try:
         from PIL import Image
         from PIL.ExifTags import TAGS
@@ -181,9 +178,20 @@ def _read_exif_dt(path: Path) -> str | None:
             exif = img._getexif()
             if not exif:
                 return None
+            dt_str = subsec = None
             for tag, val in exif.items():
-                if TAGS.get(tag) == "DateTimeOriginal":
-                    return datetime.strptime(val, "%Y:%m:%d %H:%M:%S").strftime("%Y%m%d_%H%M%S")
+                name = TAGS.get(tag)
+                if name == "DateTimeOriginal":
+                    dt_str = val
+                elif name == "SubSecTimeOriginal":
+                    subsec = str(val).strip()
+            if not dt_str:
+                return None
+            base = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S").strftime("%Y%m%d_%H%M%S")
+            if subsec and subsec.isdigit():
+                ms = (subsec + "000")[:3]  # 归一化到 3 位毫秒
+                return f"{base}_{ms}"
+            return base
     except Exception:
         pass
     return None
@@ -204,10 +212,8 @@ def _alloc_path(preferred: Path) -> Path:
 
 def download_one(session: requests.Session, url: str, dest: Path,
                  save_dir: Path, headers: dict) -> tuple[str, str]:
-    """返回 (SKIP/DONE/FAIL, 描述)"""
-    if dest.exists() and dest.stat().st_size > 0:
-        return SKIP, str(dest.relative_to(save_dir))
-    tmp = dest.with_suffix(dest.suffix + ".downloading")
+    """返回 (DONE/FAIL, 描述)；跳过逻辑由调用方的 url_map 预过滤负责"""
+    tmp = dest.parent / f".tmp_{get_ident()}.downloading"
     final = None
     try:
         resp = session.get(url, headers=headers, timeout=60, stream=True)
@@ -222,13 +228,7 @@ def download_one(session: requests.Session, url: str, dest: Path,
             tmp.unlink(missing_ok=True)
             return FAIL, f"{dest.relative_to(save_dir)} (已中断)"
         exif_dt = _read_exif_dt(tmp)
-        if exif_dt:
-            preferred = dest.parent / f"{exif_dt}{dest.suffix}"
-            if preferred.exists() and preferred.stat().st_size > 0:
-                tmp.unlink(missing_ok=True)
-                return SKIP, str(preferred.relative_to(save_dir))
-        else:
-            preferred = dest
+        preferred = dest.parent / f"{exif_dt}{dest.suffix}" if exif_dt else dest
         final = _alloc_path(preferred)
         tmp.rename(final)
         return DONE, str(final.relative_to(save_dir))
@@ -242,14 +242,14 @@ def download_one(session: requests.Session, url: str, dest: Path,
 
 # ── 缓存 ─────────────────────────────────────────────────────────────────────
 
-def _cache_path(group_id: str) -> Path:
-    return Path.home() / ".cache" / "qqphotos" / f"{group_id}.json"
+def _cache_path(save_dir: Path) -> Path:
+    return save_dir / ".qqphotos_cache.json"
 
 
-def _load_cache(group_id: str) -> dict | None:
+def _load_cache(save_dir: Path) -> dict | None:
     """返回完整缓存 dict（含 albums / photos），过期或不存在返回 None"""
     try:
-        data = json.loads(_cache_path(group_id).read_text(encoding="utf-8"))
+        data = json.loads(_cache_path(save_dir).read_text(encoding="utf-8"))
         age = int(time.time() - data["fetched_at"])
         if age < ALBUM_CACHE_TTL:
             return data
@@ -258,15 +258,36 @@ def _load_cache(group_id: str) -> dict | None:
     return None
 
 
-def _save_cache(group_id: str, albums: list[dict], photos: dict, fetched_at: float) -> None:
+def _save_cache(save_dir: Path, albums: list[dict], photos: dict, fetched_at: float) -> None:
     """增量写入缓存，保留原始 fetched_at 以便 TTL 计算正确"""
-    path = _cache_path(group_id)
+    path = _cache_path(save_dir)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps({"fetched_at": fetched_at, "albums": albums, "photos": photos},
                        ensure_ascii=False),
             encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _map_path(save_dir: Path) -> Path:
+    return save_dir / ".qqphotos_map.json"
+
+
+def _load_map(save_dir: Path) -> dict:
+    """加载 URL→已保存文件名 映射（相对路径），不存在则返回空 dict"""
+    try:
+        return json.loads(_map_path(save_dir).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_map(save_dir: Path, url_map: dict) -> None:
+    try:
+        _map_path(save_dir).write_text(
+            json.dumps(url_map, ensure_ascii=False), encoding="utf-8"
         )
     except Exception:
         pass
@@ -289,6 +310,8 @@ def main():
     save_dir = Path(args.output)
     headers = make_headers(group_id)
 
+    save_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"{_Y}🔑 正在从 Chrome 读取 QQ 登录 Cookie...{_0}")
     cookies = load_cookies()
     gtk = g_tk(cookies.get("p_skey", cookies.get("skey", "")))
@@ -304,7 +327,7 @@ def main():
     cache_fetched_at = time.time()
 
     if not args.force_refresh:
-        cache = _load_cache(group_id)
+        cache = _load_cache(save_dir)
         if cache is not None:
             albums = cache["albums"]
             cached_photos = cache.get("photos", {})
@@ -335,7 +358,7 @@ def main():
         else:
             photos = fetch_all_photos(session, group_id, album_id, uin, gtk, headers)
             cached_photos[album_id] = photos
-            _save_cache(group_id, albums, cached_photos, cache_fetched_at)
+            _save_cache(save_dir, albums, cached_photos, cache_fetched_at)
             print(f"  {_C}🖼  [{album_name}]{_0}  {len(photos)} 张")
 
         album_dir = save_dir / album_name
@@ -345,8 +368,24 @@ def main():
                 continue
             tasks.append((original_url(burl), album_dir / photo_filename(photo, i)))
 
-    total = len(tasks)
-    print(f"\n{_B}📦 共 {_C}{total}{_0}{_B} 张照片，保存到 {_C}{save_dir.resolve()}{_0}\n")
+    # 主线程预过滤：命中 URL 映射且文件存在则立即跳过，不进线程池
+    url_map = _load_map(save_dir)
+    download_tasks: list[tuple[str, Path]] = []
+    pre_skip = 0
+    for url, dest in tasks:
+        if url in url_map:
+            mapped = save_dir / url_map[url]
+            if mapped.exists() and mapped.stat().st_size > 0:
+                pre_skip += 1
+                continue
+        download_tasks.append((url, dest))
+
+    total_photos = len(tasks)
+    total = len(download_tasks)
+    skip = pre_skip
+    if pre_skip:
+        print(f"{_Y}⏭  {pre_skip} 张已有记录，直接跳过{_0}")
+    print(f"\n{_B}📦 共 {_C}{total_photos}{_0}{_B} 张，需下载 {_C}{total}{_0}{_B} 张，保存到 {_C}{save_dir.resolve()}{_0}\n")
 
     def cleanup_downloading():
         leftovers = list(save_dir.rglob("*.downloading"))
@@ -376,24 +415,27 @@ def main():
             slot_bars[slot].set_description_str(f"  {_Y}⏳ [{slot+1}] 等待中{_0}")
             slot_q.put(slot)
 
-    ok = fail = skip = 0
+    ok = fail = 0
+    _map_dirty = 0
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        future_to_dest = {
-            pool.submit(_do_download, url, dest): dest
-            for url, dest in tasks
+        future_to_task = {
+            pool.submit(_do_download, url, dest): (url, dest)
+            for url, dest in download_tasks
         }
         with tqdm(total=total, unit="张", position=workers,
                   dynamic_ncols=True, leave=True) as bar:
-            for fut in as_completed(future_to_dest):
-                dest = future_to_dest[fut]
+            for fut in as_completed(future_to_task):
+                url, dest = future_to_task[fut]
                 status, info = fut.result()
 
                 if status == DONE:
                     ok += 1
+                    url_map[url] = info
+                    _map_dirty += 1
+                    if _map_dirty % 50 == 0:
+                        _save_map(save_dir, url_map)
                     tqdm.write(f"  {_G}✓{_0} {info}")
-                elif status == SKIP:
-                    skip += 1
                 else:
                     fail += 1
                     tqdm.write(f"  {_R}✗{_0} {info}")
@@ -401,6 +443,7 @@ def main():
                 bar.update(1)
                 bar.set_postfix(完成=ok, 跳过=skip, 失败=fail)
         pool.shutdown(wait=False)
+        _save_map(save_dir, url_map)
     except KeyboardInterrupt:
         _stop.set()
         session.close()                              # 中断正在阻塞的网络 I/O
@@ -409,6 +452,7 @@ def main():
             b.close()
         time.sleep(0.3)                              # 给线程处理异常、自删 tmp 的时间
         cleanup_downloading()                        # 兜底清理残留
+        _save_map(save_dir, url_map)
         print(f"\n{_Y}⚠️  已中断{_0}")
         os._exit(1)
 
