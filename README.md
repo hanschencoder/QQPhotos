@@ -1,4 +1,5 @@
 # QQPhotos
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 一键批量下载 QQ 群相册的所有原图，自动按相册分目录保存，支持断点续传。无需手动导出 Cookie，直接读取 Chrome 登录态。
 
 ## 功能特性
@@ -73,4 +74,16 @@ python3 download.py 940758815 -o ~/Pictures/幼儿园照片
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+Copyright 2026 Chen Hang
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
