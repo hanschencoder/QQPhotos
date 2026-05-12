@@ -70,3 +70,7 @@ python3 download.py 940758815 -o ~/Pictures/幼儿园照片
 - 需要 Chrome 在运行中（`browser_cookie3` 需要读取 Chrome 的 Cookie 数据库）
 - **macOS**：首次运行可能弹出 Keychain 权限请求，点击「允许」即可
 - **Windows**：需额外安装 `pywin32`（见上方依赖）；建议使用 Windows Terminal 以正常显示颜色
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
