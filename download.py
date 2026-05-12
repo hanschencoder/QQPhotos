@@ -17,6 +17,12 @@ import browser_cookie3
 import requests
 from tqdm import tqdm
 
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    pass
+
 WORKERS = 8
 ALBUM_CACHE_TTL = 3600  # 1 小时
 
@@ -238,7 +244,7 @@ def download_one(session: requests.Session, url: str, dest: Path,
         exif_dt = _read_exif_dt(tmp)
         preferred = dest.parent / f"{exif_dt}{dest.suffix}" if exif_dt else dest
         final = _alloc_path(preferred)
-        tmp.rename(final)
+        tmp.replace(final)
         return DONE, str(final.relative_to(save_dir))
     except Exception as e:
         tmp.unlink(missing_ok=True)

@@ -17,6 +17,8 @@
 ```bash
 pip3 install requests browser-cookie3 tqdm   # 必须
 pip3 install Pillow                           # 可选：读取 EXIF 拍摄时间命名文件
+pip3 install colorama                         # 可选：Windows 旧终端彩色输出支持
+pip3 install pywin32                          # Windows 必须：browser-cookie3 读取 Cookie 依赖
 ```
 
 ## 使用方法
@@ -66,3 +68,5 @@ python3 download.py 940758815 -o ~/Pictures/幼儿园照片
 - Cookie 有效期约数天，过期后重新在 Chrome 登录 QQ 空间即可
 - 视频文件会自动跳过，仅下载图片
 - 需要 Chrome 在运行中（`browser_cookie3` 需要读取 Chrome 的 Cookie 数据库）
+- **macOS**：首次运行可能弹出 Keychain 权限请求，点击「允许」即可
+- **Windows**：需额外安装 `pywin32`（见上方依赖）；建议使用 Windows Terminal 以正常显示颜色
