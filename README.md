@@ -1,5 +1,6 @@
 # QQPhotos
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 一键批量下载 QQ 群相册的所有原图，自动按相册分目录保存，支持断点续传。无需手动导出 Cookie，直接读取 Chrome 登录态。
 
 ## 功能特性
