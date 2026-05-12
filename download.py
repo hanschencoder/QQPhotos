@@ -49,7 +49,7 @@ def make_headers(group_id: str) -> dict:
 
 # ── 认证 ──────────────────────────────────────────────────────────────────────
 
-def load_cookies() -> dict:
+def load_cookies(group_id: str = "") -> dict:
     cookies = {}
     for domain in [".qq.com", ".qzone.qq.com"]:
         try:
@@ -61,6 +61,8 @@ def load_cookies() -> dict:
     if not cookies.get("uin"):
         print("错误：未能从 Chrome 读取 QQ 登录 Cookie")
         print("请确保已在 Chrome 中登录 QQ 空间，并且 Chrome 正在运行")
+        login_url = f"https://h5.qzone.qq.com/groupphoto/index?inqq=1&groupId={group_id}" if group_id else "https://h5.qzone.qq.com/groupphoto/index?inqq=1"
+        print(f"请用 Chrome 打开以下链接登录：{login_url}")
         sys.exit(1)
     return cookies
 
@@ -330,7 +332,7 @@ def main():
     save_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"{_Y}🔑 正在从 Chrome 读取 QQ 登录 Cookie...{_0}")
-    cookies = load_cookies()
+    cookies = load_cookies(group_id)
     gtk = g_tk(cookies.get("p_skey", cookies.get("skey", "")))
     uin = cookies.get("p_uin", cookies.get("uin", "")).lstrip("o")
     print(f"{_G}✅ 已登录 QQ：{_C}{_B}{uin}{_0}")
